@@ -1,1 +1,1 @@
-sampel_query`category:tag (category1 & category2):(tag1 | tag2) word | -word2`
+sampel_query:`category:tag (category1 & category2):(tag1 | tag2) word | -word2`
