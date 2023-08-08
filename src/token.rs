@@ -1,10 +1,10 @@
 use std::fmt;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Token {
-    AND,        // &
-    OR,         // |
-    NOT,        // -
+    And,        // &
+    Or,         // |
+    Not,        // -
     OpenParen,  // (
     CloseParen, // )
     Split,      // :
@@ -13,8 +13,8 @@ pub enum Token {
 
 #[derive(Debug)]
 pub struct Tokens {
-    tokens: Vec<Token>,
-    values: Vec<String>,
+    pub tokens: Vec<Token>,
+    pub values: Vec<String>,
 }
 
 impl Tokens {
@@ -33,9 +33,9 @@ impl Tokens {
                     }
                     continue;
                 }
-                '&' => Token::AND,
-                '|' => Token::OR,
-                '-' => Token::NOT,
+                '&' => Token::And,
+                '|' => Token::Or,
+                '-' => Token::Not,
                 '(' => Token::OpenParen,
                 ')' => Token::CloseParen,
                 ':' => Token::Split,
@@ -96,9 +96,9 @@ impl fmt::Display for Tokens {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for token in &self.tokens {
             match token {
-                Token::AND => write!(f, "&")?,
-                Token::OR => write!(f, "|")?,
-                Token::NOT => write!(f, "-")?,
+                Token::And => write!(f, "&")?,
+                Token::Or => write!(f, "|")?,
+                Token::Not => write!(f, "-")?,
                 Token::OpenParen => write!(f, "(")?,
                 Token::CloseParen => write!(f, ")")?,
                 Token::Split => write!(f, ":")?,
