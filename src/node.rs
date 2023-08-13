@@ -1,123 +1,298 @@
-use crate::token::{self, Token, Tokens};
+use crate::token::{Token, Tokens};
+use std::fmt;
 
-#[derive(Debug)]
-pub enum TagNode {
-    And(Vec<TagNode>),
-    Or(Vec<TagNode>),
-    Not(Box<TagNode>),
-    Value(usize),
-}
-
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Node {
     And(Vec<Node>),
     Or(Vec<Node>),
     Not(Box<Node>),
+    Tag(usize, usize),
     Value(usize),
-    Tag(TagNode, TagNode),
     None,
 }
 
-enum TempNode {
-    And(Node),
-    Or(Node),
+impl Node {
+    fn _fmt(&self, f: &mut fmt::Formatter<'_>, values: &Vec<String>) -> fmt::Result {
+        match self {
+            Node::And(nodes) => {
+                write!(f, " AND(")?;
+                for (i, node) in nodes.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    node._fmt(f, values)?;
+                }
+                write!(f, ") ")?;
+            }
+            Node::Or(nodes) => {
+                write!(f, " OR(")?;
+                for (i, node) in nodes.iter().enumerate() {
+                    if i != 0 {
+                        write!(f, ", ")?;
+                    }
+                    node._fmt(f, values)?;
+                }
+                write!(f, ") ")?;
+            }
+            Node::Not(node) => {
+                write!(f, " NOT(")?;
+                node._fmt(f, values)?;
+                write!(f, ") ")?;
+            }
+            Node::Tag(category, value) => {
+                write!(f, " {}:{} ", values[*category], values[*value])?;
+            }
+            Node::Value(i) => {
+                write!(f, " {} ", values[*i])?;
+            }
+            Node::None => (),
+        }
+        Ok(())
+    }
 }
 
-enum Operator {
-    And,
-    Or,
-    None,
+#[derive(Clone, Debug)]
+pub struct Nodes {
+    pub node: Node,
+    pub values: Vec<String>,
 }
 
-impl Operator {
-    fn new() -> Self {
-        Self::None
-    }
-    fn and(&mut self) -> Result<(), &'static str> {
-        if let Self::None = self {
-            *self = Self::And;
-            return Ok(());
-        }
-        Err("operator error")
-    }
-    fn or(&mut self) -> Result<(), &'static str> {
-        if let Self::None = self {
-            *self = Self::Or;
-            return Ok(());
-        }
-        Err("operator error")
-    }
-    fn get(&self, node: Node) -> TempNode {
-        if let Self::Or = self {
-            TempNode::Or(node)
-        } else {
-            TempNode::And(node)
-        }
-    }
-    fn reset(&mut self) {
-        *self = Self::None;
+impl fmt::Display for Nodes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.node._fmt(f, &self.values)
     }
 }
 
 impl Node {
-    fn new(tokens: &[Token]) -> Result<Self, &'static str> {
-        let mut temp_nodes = Vec::new();
-        let mut node = Node::None;
-        let mut operator = Operator::new();
-        let mut end = tokens.len() - 1;
-        let mut deep = 0;
-        let mut tag = false;
+    fn not(self) -> Self {
+        match self {
+            Node::Not(n) => *n,
+            _ => Node::Not(Box::new(self)),
+        }
+    }
+    fn to_tags(&mut self, mut names: Self) -> Result<(), &'static str> {
+        match self {
+            Node::And(nodes) => {
+                for node in nodes {
+                    node.to_tags(names.clone())?;
+                }
+            }
+            Node::Or(nodes) => {
+                for node in nodes {
+                    node.to_tags(names.clone())?;
+                }
+            }
+            Node::Not(node) => {
+                node.to_tags(names)?;
+            }
+            Node::Tag(_, _) => return Err("invalid tag"),
+            Node::Value(i) => {
+                names.to_tag(*i)?;
+                *self = names;
+            }
+            Node::None => (),
+        }
+        Ok(())
+    }
+    fn to_tag(&mut self, category: usize) -> Result<(), &'static str> {
+        match self {
+            Node::And(nodes) => {
+                for node in nodes {
+                    node.to_tag(category)?;
+                }
+            }
+            Node::Or(nodes) => {
+                for node in nodes {
+                    node.to_tag(category)?;
+                }
+            }
+            Node::Not(node) => {
+                node.to_tag(category)?;
+            }
+            Node::Tag(_, _) => return Err("invalid tag"),
+            Node::Value(i) => {
+                *self = Node::Tag(category, *i);
+            }
+            Node::None => (),
+        }
+        Ok(())
+    }
+    fn fix(&mut self) -> bool{
+        true
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Operator {
+    And,
+    Or,
+    Tag,
+}
+
+fn custom_filter<T: PartialEq, U>(v: &mut Vec<T>, u: &mut Vec<U>, item: T) {
+    if v.len() + 1 != u.len() {
+        panic!("v.len() + 1 != u.len()");
+    }
+    let mut i = 0;
+    let len = v.len();
+    for j in 0..len {
+        if j != i {
+            unsafe {
+                std::ptr::write(&mut v[i], std::ptr::read(&v[j]));
+                std::ptr::write(&mut u[i], std::ptr::read(&u[j]));
+            }
+        }
+        if v[j] != item {
+            i += 1;
+        }
+    }
+    unsafe {
+        if i != len {
+            std::ptr::write(&mut u[i], std::ptr::read(&u[len]));
+        }
+        v.set_len(i);
+        u.set_len(i + 1);
+    }
+}
+
+fn replace<T>(v: &mut Vec<T>, index: usize, replacement: T) -> T {
+    if let Some(t) = v.get_mut(index) {
+        std::mem::replace(t, replacement)
+    } else {
+        panic!("index {} out of bounds: {}", index, v.len());
+    }
+}
+
+impl Tokens {
+    pub fn parse(self) -> Result<Nodes, &'static str> {
+        let Tokens { tokens, values } = self;
+        let node = Self::_parse(&tokens)?;
+        Ok(Nodes { node, values })
+    }
+    fn _parse(tokens: &[Token]) -> Result<Node, &'static str> {
+        if tokens.is_empty() {
+            return Ok(Node::None);
+        }
+        let mut nest = 0;
+        let mut operators = Vec::new();
+        let mut nodes = Vec::new();
+        let mut node = None;
+        let mut start = tokens.len() - 1;
         for (i, token) in tokens.iter().enumerate().rev() {
-            let val = match token {
+            let operator = match token {
                 Token::CloseParen => {
-                    deep += 1;
-                    if deep == 1 {
-                        end = i;
+                    if nest == 0 {
+                        start = i;
                     }
+                    nest += 1;
                     continue;
                 }
                 Token::OpenParen => {
-                    deep -= 1;
-                    if deep == 0 {
-                        Self::new(&tokens[i + 1..end])?
-                    } else {
-                        continue;
-                    }
-                }
-                _ if deep > 0 => continue,
-                _ if deep < 0 => return Err("parentheses error"),
-                Token::And => {
-                    let node = Self::new(&tokens[i + 1..end])?;
-                    if let Some(node) = node {
-                        temp_nodes.push(TempNode::And(node));
+                    nest -= 1;
+                    if nest < 0 {
+                        return Err("unmatched parenthesis");
+                    } else if nest == 0 {
+                        if let Some(node) = node {
+                            nodes.push(node);
+                            operators.push(Operator::And);
+                        }
+                        node = Some(Self::_parse(&tokens[(i + 1)..start])?);
                     }
                     continue;
                 }
-                _ => continue,
+                _ if nest > 0 => continue,
+                Token::Value(i) => {
+                    if let Some(node) = node {
+                        nodes.push(node);
+                        operators.push(Operator::And);
+                    }
+                    node = Some(Node::Value(*i));
+                    continue;
+                }
+                Token::Not => {
+                    if let None = node {
+                        return Err("invalid not");
+                    }
+                    node = node.map(|n| n.not());
+                    continue;
+                }
+                Token::Split => Operator::Tag,
+                Token::And => Operator::And,
+                Token::Or => Operator::Or,
             };
+            if let Some(node) = node {
+                nodes.push(node);
+                operators.push(operator);
+            } else {
+                return Err("invalid operator");
+            }
+            node = None;
         }
-        Err("write now")
-    }
-    fn not(self) -> Self {
-        if let Self::Not(node) = self {
-            return *node;
+        if nest != 0 {
+            return Err("unmatched parenthesis");
         }
-        Node::Not(Box::new(self))
-    }
-}
-
-pub struct NodeObject {
-    pub node: Option<Node>,
-    pub values: Vec<String>,
-}
-
-impl From<Tokens> for NodeObject {
-    fn from(value: Tokens) -> Self {
-        let Tokens { tokens, values } = value;
-        let mut nodes = NodeObject {
-            node: Node::new(&tokens),
-            values,
-        };
-        nodes
+        if let Some(node) = node {
+            nodes.push(node);
+        } else {
+            return Err("invalid operator");
+        }
+        for (i, op) in operators.iter().enumerate() {
+            if &Operator::Tag == op {
+                let names = replace(&mut nodes, i, Node::None);
+                nodes[i + 1].to_tags(names)?;
+            }
+        }
+        custom_filter(&mut operators, &mut nodes, Operator::Tag);
+        let mut a_nodes: Option<Vec<Node>> = None;
+        for (i, op) in operators.iter().enumerate() {
+            if &Operator::And == op {
+                if let Some(a_nodes) = a_nodes.as_mut() {
+                    a_nodes.push(replace(&mut nodes, i, Node::None));
+                } else {
+                    a_nodes = Some(vec![replace(&mut nodes, i, Node::None)]);
+                }
+            } else {
+                a_nodes
+                    .as_mut()
+                    .map(|a_n| a_n.push(replace(&mut nodes, i, Node::None)));
+                if let Some(a_n) = a_nodes {
+                    nodes[i] = Node::And(a_n);
+                    a_nodes = None;
+                }
+            }
+        }
+        a_nodes
+            .as_mut()
+            .map(|a_n| a_n.push(replace(&mut nodes, operators.len(), Node::None)));
+        if let Some(a_n) = a_nodes {
+            nodes[operators.len()] = Node::And(a_n);
+        }
+        custom_filter(&mut operators, &mut nodes, Operator::And);
+        let mut o_nodes: Option<Vec<Node>> = None;
+        for (i, op) in operators.iter().enumerate() {
+            if &Operator::Or == op {
+                if let Some(o_nodes) = o_nodes.as_mut() {
+                    o_nodes.push(replace(&mut nodes, i, Node::None));
+                } else {
+                    o_nodes = Some(vec![replace(&mut nodes, i, Node::None)]);
+                }
+            } else {
+                o_nodes
+                    .as_mut()
+                    .map(|o_n| o_n.push(replace(&mut nodes, i, Node::None)));
+                if let Some(o_n) = o_nodes {
+                    nodes[i] = Node::Or(o_n);
+                    o_nodes = None;
+                }
+            }
+        }
+        o_nodes
+            .as_mut()
+            .map(|o_n| o_n.push(replace(&mut nodes, operators.len(), Node::None)));
+        if let Some(o_n) = o_nodes {
+            nodes[operators.len()] = Node::Or(o_n);
+        }
+        custom_filter(&mut operators, &mut nodes, Operator::Or);
+        return Ok(nodes.pop().unwrap());
     }
 }
