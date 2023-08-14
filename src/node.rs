@@ -1,7 +1,7 @@
 use crate::token::{Token, Tokens};
 use std::fmt;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Node {
     And(Vec<Node>),
     Or(Vec<Node>),
@@ -9,6 +9,7 @@ pub enum Node {
     Tag(usize, usize),
     Value(usize),
     None,
+    ALL,
 }
 
 impl Node {
@@ -45,9 +46,22 @@ impl Node {
             Node::Value(i) => {
                 write!(f, " {} ", values[*i])?;
             }
-            Node::None => (),
+            Node::None => write!(f, " None ")?,
+            Node::ALL => write!(f, " ALL ")?,
         }
         Ok(())
+    }
+    fn and_nodes(&self) -> Option<&[Node]> {
+        match self {
+            Node::And(nodes) => Some(nodes),
+            _ => None,
+        }
+    }
+    fn or_nodes(&self) -> Option<&[Node]> {
+        match self {
+            Node::Or(nodes) => Some(nodes),
+            _ => None,
+        }
     }
 }
 
@@ -91,6 +105,7 @@ impl Node {
                 *self = names;
             }
             Node::None => (),
+            Node::ALL => return Err("invalid tag"),
         }
         Ok(())
     }
@@ -114,11 +129,99 @@ impl Node {
                 *self = Node::Tag(category, *i);
             }
             Node::None => (),
+            Node::ALL => return Err("invalid tag"),
         }
         Ok(())
     }
-    fn fix(&mut self) -> bool{
-        true
+    pub fn fix(&mut self) {
+        while self._fix().is_ok() {}
+    }
+    fn _fix(&mut self) -> Result<(), &'static str> {
+        match self {
+            Node::And(nodes) => {
+                if nodes.is_empty() {
+                    *self = Node::None;
+                    return Ok(());
+                } else if nodes.len() == 1 {
+                    *self = nodes.pop().unwrap();
+                    return Ok(());
+                }
+                for i in 0..nodes.len() {
+                    match nodes[i] {
+                        Node::None => {
+                            *self = Node::None;
+                            return Ok(());
+                        }
+                        Node::And(_) => {
+                            let len = nodes.len() - 1;
+                            nodes.swap(i, len);
+                            let n = nodes.pop().unwrap();
+                            nodes.extend_from_slice(&n.and_nodes().unwrap());
+                            return Ok(());
+                        }
+                        Node::ALL => {
+                            let len = nodes.len() - 1;
+                            nodes.swap(i, len);
+                            nodes.pop();
+                            return Ok(());
+                        }
+                        _ => {
+                            if Ok(()) == nodes[i]._fix() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+            Node::Or(nodes) => {
+                if nodes.is_empty() {
+                    *self = Node::ALL;
+                    return Ok(());
+                } else if nodes.len() == 1 {
+                    *self = nodes.pop().unwrap();
+                    return Ok(());
+                }
+                for i in 0..nodes.len() {
+                    match nodes[i] {
+                        Node::None => {
+                            let len = nodes.len() - 1;
+                            nodes.swap(i, len);
+                            nodes.pop();
+                            return Ok(());
+                        }
+                        Node::Or(_) => {
+                            let len = nodes.len() - 1;
+                            nodes.swap(i, len);
+                            let n = nodes.pop().unwrap();
+                            nodes.extend_from_slice(&n.or_nodes().unwrap());
+                            return Ok(());
+                        }
+                        Node::ALL => {
+                            *self = Node::ALL;
+                            return Ok(());
+                        }
+                        _ => {
+                            if Ok(()) == nodes[i]._fix() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+            Node::Not(node) => match **node {
+                Node::None => {
+                    *self = Node::ALL;
+                    return Ok(());
+                }
+                Node::Not(ref n) => {
+                    *self = (**n).clone();
+                    return Ok(());
+                }
+                _ => (),
+            },
+            _ => (),
+        }
+        Err("node is not fixable")
     }
 }
 
@@ -166,8 +269,27 @@ fn replace<T>(v: &mut Vec<T>, index: usize, replacement: T) -> T {
 impl Tokens {
     pub fn parse(self) -> Result<Nodes, &'static str> {
         let Tokens { tokens, values } = self;
-        let node = Self::_parse(&tokens)?;
-        Ok(Nodes { node, values })
+        let mut flag = false;
+        for token in &tokens {
+            match token {
+                Token::OpenParen => continue,
+                Token::CloseParen => continue,
+                _ => {
+                    flag = true;
+                    break;
+                }
+            }
+        }
+        if flag {
+            let mut node = Self::_parse(&tokens)?;
+            node.fix();
+            Ok(Nodes { node, values })
+        } else {
+            Ok(Nodes {
+                node: Node::ALL,
+                values,
+            })
+        }
     }
     fn _parse(tokens: &[Token]) -> Result<Node, &'static str> {
         if tokens.is_empty() {
